@@ -1,0 +1,94 @@
+package org.ebookdroid.droids;
+
+import me.foobnix.android.utils.LOG;
+import me.foobnix.ext.CacheZipUtils;
+import me.foobnix.ext.EpubExtractor;
+import me.foobnix.ext.FooterNote;
+import me.foobnix.ext.MobiExtract;
+import me.foobnix.model.AppSP;
+import me.foobnix.pdf.info.JsonHelper;
+import me.foobnix.pdf.info.model.BookCSS;
+
+import org.ebookdroid.core.codec.CodecDocument;
+import org.ebookdroid.droids.mupdf.codec.MuPdfDocument;
+import org.ebookdroid.droids.mupdf.codec.PdfContext;
+
+import java.io.File;
+import java.util.Map;
+
+public class MobiContext extends PdfContext {
+
+    String fileNameEpub = null;
+
+    public int originalHashCode;
+    File cacheFile;
+
+    @Override
+    public File getCacheFileName(String fileName) {
+        originalHashCode = (fileName + BookCSS.get().isAutoHypens + AppSP.get().hypenLang).hashCode();
+        cacheFile = new File(CacheZipUtils.CACHE_BOOK_DIR, originalHashCode + "" + originalHashCode + ".epub");
+        return cacheFile;
+    }
+
+    @Override
+    public CodecDocument openDocumentInner(String fileName, String password) {
+
+        LOG.d("Context", "MobiContext", fileName);
+
+        if (cacheFile.isFile()) {
+            fileNameEpub = cacheFile.getPath();
+            LOG.d("Context", "MobiContext cache", fileNameEpub);
+
+        } else {
+            try {
+                int outName = BookCSS.get().isAutoHypens ? "temp".hashCode() : originalHashCode;
+                FooterNote extract = MobiExtract.extract(fileName, CacheZipUtils.CACHE_BOOK_DIR.getPath(), outName + "");
+                fileNameEpub = extract.path;
+                if (BookCSS.get().isAutoHypens) {
+
+                    EpubExtractor.proccessHypens(fileNameEpub, cacheFile.getPath(), null);
+                    fileNameEpub = cacheFile.getPath();
+                }
+                LOG.d("Context", "MobiContext extract", fileNameEpub);
+
+            } catch (Exception e) {
+                LOG.e(e);
+            }
+        }
+
+        final MuPdfDocument muPdfDocument = new MuPdfDocument(this, MuPdfDocument.FORMAT_PDF, fileNameEpub, password);
+
+        final File jsonFile = new File(cacheFile + ".json");
+        if (jsonFile.isFile()) {
+            muPdfDocument.setFootNotes(JsonHelper.fileToMap(jsonFile));
+            LOG.d("Load notes from file", jsonFile);
+        } else {
+
+            new Thread() {
+                @Override
+                public void run() {
+                    Map<String, String> notes = null;
+                    try {
+                        notes = EpubExtractor.get().getFooterNotes(fileNameEpub);
+                        LOG.d("new file name", fileNameEpub);
+                        muPdfDocument.setFootNotes(notes);
+
+                        JsonHelper.mapToFile(jsonFile, notes);
+                        LOG.d("save notes to file", jsonFile);
+
+                        removeTempFiles();
+
+                    } catch (Exception e) {
+                        LOG.e(e);
+                    }
+                }
+
+                ;
+            }.start();
+        }
+
+
+        return muPdfDocument;
+    }
+
+}
